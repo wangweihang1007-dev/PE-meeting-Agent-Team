@@ -1,0 +1,8 @@
+.env
+inputs/
+outputs/
+__pycache__/
+*.pyc
+extracted_prompts.txt
+.agents/
+.codex/
