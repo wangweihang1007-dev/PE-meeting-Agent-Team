@@ -35,7 +35,14 @@ python run_pipeline.py --transcript inputs/transcript.txt --background inputs/ba
 如果需要同时生成 Word 版最终纪要，传入模板：
 
 ```powershell
-python run_pipeline.py --transcript inputs/transcript.txt --background inputs/background.txt --out-dir outputs --max-concurrency 4 --docx-template "C:\Users\27851\xwechat_files\wxid_212yrh4z0oft22_bea2\msg\file\2026-07\新样式.docx"
+python run_pipeline.py --transcript inputs/transcript.txt --background inputs/background.txt --out-dir outputs --max-concurrency 4 --company 联芯科技 --date 2026年07月07日 --participants-file inputs/participants.txt --docx-template "C:\Users\27851\xwechat_files\wxid_212yrh4z0oft22_bea2\msg\file\2026-07\新样式.docx"
+```
+
+`participants.txt` 示例：
+
+```text
+冯源资本    任路遥    张凯 王伟航
+洪启（公司）    洪总
 ```
 
 如果没有背景资料：
@@ -48,11 +55,13 @@ python run_pipeline.py --transcript inputs/transcript.txt --out-dir outputs
 
 `outputs` 下会生成：
 
-- `01_sections.json`：划分结果
-- `02_revised_sections.md`：分区修正稿
-- `03_revised_all_by_time.md`：全部修正稿按时间顺序拼接版
-- `04_qa_sections.md`：分区 Q&A
-- `05_qa_all_by_time.md`：全部 Q&A 按时间顺序拼接版
-- `06_final_summary.md`：最终会议纪要
-- `06_final_summary.docx`：套用指定 Word 模板后的最终会议纪要
-- `07_qc_report.md`：质检报告
+文件名统一为“日期_公司_文件类型”：
+
+- `2026年07月07日_联芯科技_分区结果.json`：划分结果
+- `2026年07月07日_联芯科技_录音修正第1部分.md`：单分区修正稿
+- `2026年07月07日_联芯科技_录音修正汇总.md`：全部修正稿按时间顺序拼接版
+- `2026年07月07日_联芯科技_QA整理第1部分.md`：单分区 Q&A
+- `2026年07月07日_联芯科技_QA整理汇总.md`：全部 Q&A 按时间顺序拼接版
+- `2026年07月07日_联芯科技_会议纪要.md`：最终会议纪要 Markdown
+- `2026年07月07日_联芯科技_会议纪要.docx`：套用指定 Word 模板后的最终会议纪要
+- `2026年07月07日_联芯科技_质检报告.md`：质检报告
