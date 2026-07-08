@@ -59,11 +59,11 @@ def _fallback_sections(raw_transcript: str, target_chars: int = 2200, max_chars:
     header: list[str] = []
     blocks: list[str] = []
     current: list[str] = []
-    time_pattern = re.compile(r"^(?:发言人\d+\s+)?\d{1,2}:\d{2}(?::\d{2})?$")
+    time_pattern = re.compile(r"^(?:发言人\d*\s+)?\d{1,2}:\d{2}(?::\d{2})?$")
 
     for line in lines:
         stripped = line.strip()
-        if time_pattern.match(stripped) or re.match(r"^发言人\d+\s+\d{1,2}:\d{2}", stripped):
+        if time_pattern.match(stripped) or re.match(r"^发言人\d*\s+\d{1,2}:\d{2}", stripped):
             if current:
                 blocks.append("\n".join(current).strip())
             current = [line]

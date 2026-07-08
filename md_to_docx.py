@@ -98,6 +98,8 @@ def markdown_to_docx(markdown_path: Path, template_path: Path, output_path: Path
         if heading:
             flush_body_list(document, body_list_items)
             heading_text, style = heading
+            if heading_text == "会议纪要":
+                continue
             if heading_text.startswith("附录"):
                 in_appendix = True
             add_paragraph(document, heading_text, style=style)
