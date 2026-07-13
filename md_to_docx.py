@@ -44,6 +44,17 @@ def add_paragraph(document: Document, text: str, style: str = "Normal"):
     return paragraph
 
 
+def add_plain_heading(document: Document, text: str, level: int):
+    paragraph = document.add_paragraph(style=safe_style(document, "Normal"))
+    paragraph.paragraph_format.first_line_indent = None
+    paragraph.paragraph_format.space_before = Pt(8 if level == 1 else 6)
+    paragraph.paragraph_format.space_after = Pt(4)
+    run = paragraph.add_run(text)
+    run.bold = True
+    run.font.size = Pt({1: 16, 2: 14, 3: 12}.get(level, 12))
+    return paragraph
+
+
 def apply_body_indent(paragraph) -> None:
     paragraph.paragraph_format.first_line_indent = Pt(21)
 
@@ -60,18 +71,18 @@ def normalize_markdown_line(line: str) -> str:
     return line.strip().replace("\\_", "_")
 
 
-def heading_style_for_line(line: str) -> tuple[str, str] | None:
+def heading_style_for_line(line: str) -> tuple[str, int] | None:
     if line.startswith("#"):
         level = len(line) - len(line.lstrip("#"))
         text = line[level:].strip()
         text = re.sub(r"^\d+(?:\.\d+)*\s+", "", text)
-        return text, f"Heading {min(level, 3)}"
+        return text, min(level, 3)
     if re.match(r"^\d+\.\d+\s+.+", line):
-        return re.sub(r"^\d+\.\d+\s+", "", line), "Heading 2"
+        return re.sub(r"^\d+\.\d+\s+", "", line), 2
     if re.match(r"^\d+\s+.+", line):
-        return re.sub(r"^\d+\s+", "", line), "Heading 1"
+        return re.sub(r"^\d+\s+", "", line), 1
     if line.startswith("附录"):
-        return line, "Heading 1"
+        return line, 1
     return None
 
 
@@ -97,12 +108,12 @@ def markdown_to_docx(markdown_path: Path, template_path: Path, output_path: Path
         heading = heading_style_for_line(line)
         if heading:
             flush_body_list(document, body_list_items)
-            heading_text, style = heading
+            heading_text, level = heading
             if heading_text == "会议纪要":
                 continue
             if heading_text.startswith("附录"):
                 in_appendix = True
-            add_paragraph(document, heading_text, style=style)
+            add_plain_heading(document, heading_text, level=level)
             continue
         if line.startswith("- "):
             if in_appendix:

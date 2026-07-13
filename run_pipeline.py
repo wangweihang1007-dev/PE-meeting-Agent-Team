@@ -6,6 +6,7 @@ from pathlib import Path
 
 from deepseek_client import DeepSeekClient
 from md_to_docx import markdown_to_docx
+from project_intake import generate_project_intake, write_intake_excel
 from workflow import build_graph
 
 
@@ -84,6 +85,11 @@ def main() -> None:
     parser.add_argument("--date", dest="date_text", default=os.getenv("MEETING_DATE"), help="会议日期，默认使用运行当天，格式如 2026年07月07日")
     parser.add_argument("--participants", help="参会人文本，会写入最终纪要标题下方")
     parser.add_argument("--participants-file", help="参会人文本文件，UTF-8")
+    parser.add_argument("--qcc-material", action="append", default=[], help="企查查/工商资料，仅用于项目录入阶段，可重复传入")
+    parser.add_argument("--intake-material", action="append", default=[], help="项目录入补充资料，可重复传入")
+    parser.add_argument("--intake-template", help="新版项目录入表模板；传入后生成项目录入 Excel")
+    parser.add_argument("--intake-output", help="项目录入 Excel 输出路径；默认写入输出目录")
+    parser.add_argument("--project-source", default="待补充", help="项目来源，写入项目录入表 O 列")
     args = parser.parse_args()
 
     load_env_file(Path(args.env))
@@ -111,11 +117,30 @@ def main() -> None:
     write_section_files(out_dir, prefix, qa_sections, "QA整理")
     write_text(out_dir / f"{prefix}_QA整理汇总.md", concat_by_time(qa_sections))
     final_summary_path = out_dir / f"{prefix}_会议纪要.md"
-    write_text(final_summary_path, add_summary_front_matter(result.get("final_summary", ""), participants, date_text))
+    final_summary_with_front_matter = add_summary_front_matter(result.get("final_summary", ""), participants, date_text)
+    write_text(final_summary_path, final_summary_with_front_matter)
     docx_template = args.docx_template or os.getenv("SUMMARY_DOCX_TEMPLATE")
     if docx_template:
         markdown_to_docx(final_summary_path, Path(docx_template), out_dir / f"{prefix}_会议纪要.docx")
     write_text(out_dir / f"{prefix}_质检报告.md", result.get("qc_report", ""))
+
+    if args.qcc_material or args.intake_material or args.intake_template:
+        entry, warnings = generate_project_intake(
+            client=client,
+            final_summary=final_summary_with_front_matter,
+            background=background,
+            qcc_paths=[Path(path) for path in args.qcc_material],
+            other_paths=[Path(path) for path in args.intake_material],
+            project_source=args.project_source,
+            intake_date=date_text,
+        )
+        intake_json_path = out_dir / f"{prefix}_项目录入草稿.json"
+        write_text(intake_json_path, json.dumps(entry, ensure_ascii=False, indent=2))
+        if warnings:
+            write_text(out_dir / f"{prefix}_项目录入校验提示.md", "\n".join(f"- {item}" for item in warnings))
+        if args.intake_template:
+            intake_output = Path(args.intake_output) if args.intake_output else out_dir / f"{prefix}_项目录入.xlsx"
+            write_intake_excel(entry, Path(args.intake_template), intake_output)
 
     print(f"完成。输出目录：{out_dir.resolve()}")
 

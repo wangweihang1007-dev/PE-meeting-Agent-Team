@@ -7,6 +7,9 @@
 3. Q&A 智能体：在所有修正完成后启动，并行处理；每个 Q&A 节点只看对应修正稿。
 4. 总结智能体：只看全部 Q&A，不看 BP、原文或修正稿。
 5. 质检智能体：检查流程隔离、格式和事实一致性。
+6. 项目录入智能体（可选）：只在会议纪要完成后启动，读取最终纪要 + BP + 企查查/工商 + 其他补充资料，生成新版项目录入 JSON 和 Excel。
+
+注意：企查查/工商资料只用于项目录入阶段，不会进入会议纪要修正、Q&A 或总结链路。
 
 ## 安装
 
@@ -51,6 +54,26 @@ python run_pipeline.py --transcript inputs/transcript.txt --background inputs/ba
 python run_pipeline.py --transcript inputs/transcript.txt --out-dir outputs
 ```
 
+如果需要在生成会议纪要后同步生成项目录入表，额外传入企查查/工商资料和新版项目表模板：
+
+```powershell
+python run_pipeline.py `
+  --transcript inputs/transcript.txt `
+  --background inputs/background.txt `
+  --out-dir outputs `
+  --max-concurrency 4 `
+  --company 硕成集团 `
+  --date 2026年07月13日 `
+  --participants-file inputs/participants.txt `
+  --docx-template "C:\Users\27851\xwechat_files\wxid_212yrh4z0oft22_bea2\msg\file\2026-07\新样式.docx" `
+  --qcc-material inputs/qcc.xlsx `
+  --intake-material inputs/other_material.docx `
+  --intake-template "C:\Users\27851\Desktop\冯源资本\SKILL\PeSKILL-main\PeSKILL-main\investment-project-intake\assets\项目表-录入参考指引.xlsx" `
+  --project-source 夏磊
+```
+
+`--qcc-material` 可以重复传入多个企查查/工商文件；`--intake-material` 可以重复传入其他只用于项目录入的补充资料。
+
 ## 输出
 
 `outputs` 下会生成：
@@ -65,3 +88,6 @@ python run_pipeline.py --transcript inputs/transcript.txt --out-dir outputs
 - `2026年07月07日_联芯科技_会议纪要.md`：最终会议纪要 Markdown
 - `2026年07月07日_联芯科技_会议纪要.docx`：套用指定 Word 模板后的最终会议纪要
 - `2026年07月07日_联芯科技_质检报告.md`：质检报告
+- `2026年07月07日_联芯科技_项目录入草稿.json`：可选，项目录入 JSON
+- `2026年07月07日_联芯科技_项目录入.xlsx`：可选，新版 A:Q 项目表
+- `2026年07月07日_联芯科技_项目录入校验提示.md`：可选，项目录入校验提示
