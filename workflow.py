@@ -1,6 +1,7 @@
 import json
 import operator
 import re
+from datetime import datetime
 from typing import Annotated, Any, TypedDict
 
 from langgraph.constants import Send
@@ -30,10 +31,25 @@ class PipelineState(TypedDict, total=False):
     background_materials: str
     sections: list[Section]
     section: Section
+    total_sections: int
     revised_sections: Annotated[list[ProcessedSection], operator.add]
     qa_sections: Annotated[list[ProcessedSection], operator.add]
     final_summary: str
     qc_report: str
+
+
+def _progress(enabled: bool, step: str, current: int, total: int, detail: str = "") -> None:
+    if not enabled:
+        return
+    total = max(total, 1)
+    current = min(max(current, 0), total)
+    width = 24
+    filled = round(width * current / total)
+    bar = "#" * filled + "-" * (width - filled)
+    percent = round(100 * current / total)
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    suffix = f"｜{detail}" if detail else ""
+    print(f"[{timestamp}] [{bar}] {percent:3d}% {step} {current}/{total}{suffix}", flush=True)
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -122,8 +138,20 @@ def _fallback_sections(raw_transcript: str, target_chars: int = 2200, max_chars:
     return sections
 
 
-def build_graph(client: DeepSeekClient):
+def build_graph(client: DeepSeekClient, progress: bool = True, checkpoint: Any | None = None):
     def divide_transcript(state: PipelineState) -> PipelineState:
+        if checkpoint:
+            cached_sections = checkpoint.load_json("sections")
+            if cached_sections:
+                sections = cached_sections
+                _progress(progress, "划分智能体", 1, 1, f"断点续跑，共 {len(sections)} 个分区")
+                return {
+                    "sections": sections,
+                    "total_sections": len(sections),
+                    "revised_sections": [],
+                    "qa_sections": [],
+                }
+        _progress(progress, "划分智能体", 0, 1, "开始划分会议原文")
         result = client.chat(
             DIVIDER_PROMPT,
             "请帮我对以下会议转录稿进行区域划分处理：\n\n" + state["raw_transcript"],
@@ -136,13 +164,35 @@ def build_graph(client: DeepSeekClient):
             sections = _fallback_sections(state["raw_transcript"])
         if len(sections) <= 1 and len(state["raw_transcript"]) > 3500:
             sections = _fallback_sections(state["raw_transcript"])
-        return {"sections": sections, "revised_sections": [], "qa_sections": []}
+        if checkpoint:
+            checkpoint.save_json("sections", sections)
+        _progress(progress, "划分智能体", 1, 1, f"完成，共 {len(sections)} 个分区")
+        return {"sections": sections, "total_sections": len(sections), "revised_sections": [], "qa_sections": []}
 
     def send_to_revision(state: PipelineState) -> list[Send]:
-        return [Send("revise_section", {"section": section, "background_materials": state.get("background_materials", "")}) for section in state["sections"]]
+        total = len(state["sections"])
+        _progress(progress, "修正智能体", 0, total, "开始并行修正")
+        return [
+            Send(
+                "revise_section",
+                {
+                    "section": section,
+                    "background_materials": state.get("background_materials", ""),
+                    "total_sections": total,
+                },
+            )
+            for section in state["sections"]
+        ]
 
     def revise_section(state: PipelineState) -> PipelineState:
         section = state["section"]
+        total = state.get("total_sections", section["index"])
+        if checkpoint:
+            cached = checkpoint.load_processed("revised_sections", section["index"])
+            if cached:
+                _progress(progress, "修正智能体", section["index"], total, f"第 {section['index']} 部分使用断点")
+                return {"revised_sections": [cached]}
+        _progress(progress, "修正智能体", section["index"] - 1, total, f"第 {section['index']} 部分开始")
         user_prompt = (
             f"【背景材料】\n{state.get('background_materials') or '未提供'}\n\n"
             f"【当前分区】\n"
@@ -151,17 +201,27 @@ def build_graph(client: DeepSeekClient):
             f"{section['text']}"
         )
         revised = client.chat(REVISION_PROMPT, user_prompt, temperature=0.1)
-        return {
-            "revised_sections": [
-                {"index": section["index"], "time_range": section.get("time_range", "未标注"), "text": revised}
-            ]
-        }
+        item = {"index": section["index"], "time_range": section.get("time_range", "未标注"), "text": revised}
+        if checkpoint:
+            checkpoint.save_processed("revised_sections", item)
+        _progress(progress, "修正智能体", section["index"], total, f"第 {section['index']} 部分完成")
+        return {"revised_sections": [item]}
 
     def send_to_qa(state: PipelineState) -> list[Send]:
-        return [Send("qa_section", {"section": section}) for section in _sort_processed(state["revised_sections"])]
+        sections = _sort_processed(state["revised_sections"])
+        total = len(sections)
+        _progress(progress, "QA智能体", 0, total, "全部修正完成，开始并行整理 Q&A")
+        return [Send("qa_section", {"section": section, "total_sections": total}) for section in sections]
 
     def qa_section(state: PipelineState) -> PipelineState:
         section = state["section"]
+        total = state.get("total_sections", section["index"])
+        if checkpoint:
+            cached = checkpoint.load_processed("qa_sections", section["index"])
+            if cached:
+                _progress(progress, "QA智能体", section["index"], total, f"第 {section['index']} 部分使用断点")
+                return {"qa_sections": [cached]}
+        _progress(progress, "QA智能体", section["index"] - 1, total, f"第 {section['index']} 部分开始")
         user_prompt = (
             f"【当前分区修正稿】\n"
             f"分区编号：{section['index']}\n"
@@ -169,21 +229,36 @@ def build_graph(client: DeepSeekClient):
             f"{section['text']}"
         )
         qa_text = client.chat(QA_PROMPT, user_prompt, temperature=0.2)
-        return {
-            "qa_sections": [
-                {"index": section["index"], "time_range": section.get("time_range", "未标注"), "text": qa_text}
-            ]
-        }
+        item = {"index": section["index"], "time_range": section.get("time_range", "未标注"), "text": qa_text}
+        if checkpoint:
+            checkpoint.save_processed("qa_sections", item)
+        _progress(progress, "QA智能体", section["index"], total, f"第 {section['index']} 部分完成")
+        return {"qa_sections": [item]}
 
     def summarize(state: PipelineState) -> PipelineState:
+        if checkpoint:
+            cached = checkpoint.load_text("final_summary")
+            if cached:
+                _progress(progress, "总结智能体", 1, 1, "使用断点会议纪要")
+                return {"final_summary": cached}
+        _progress(progress, "总结智能体", 0, 1, "开始基于全部 Q&A 生成会议纪要")
         qa_bundle = "\n\n".join(
             f"【分区 {item['index']}｜{item.get('time_range', '未标注')}】\n{item['text']}"
             for item in _sort_processed(state["qa_sections"])
         )
         final_summary = client.chat(SUMMARY_PROMPT, "以下是全部按时间顺序排列的分区 Q&A 稿：\n\n" + qa_bundle, temperature=0.2)
+        if checkpoint:
+            checkpoint.save_text("final_summary", final_summary)
+        _progress(progress, "总结智能体", 1, 1, "会议纪要生成完成")
         return {"final_summary": final_summary}
 
     def quality_check(state: PipelineState) -> PipelineState:
+        if checkpoint:
+            cached = checkpoint.load_text("qc_report")
+            if cached:
+                _progress(progress, "质检智能体", 1, 1, "使用断点质检报告")
+                return {"qc_report": cached}
+        _progress(progress, "质检智能体", 0, 1, "开始质检流程隔离和事实一致性")
         original_bundle = "\n\n".join(
             f"【原始分区 {item['index']}｜{item.get('time_range', '未标注')}】\n{item['text']}"
             for item in sorted(state.get("sections", []), key=lambda item: item["index"])
@@ -204,6 +279,9 @@ def build_graph(client: DeepSeekClient):
             f"【最终会议纪要】\n{state['final_summary']}"
         )
         qc_report = client.chat(QC_PROMPT, user_prompt, temperature=0.1)
+        if checkpoint:
+            checkpoint.save_text("qc_report", qc_report)
+        _progress(progress, "质检智能体", 1, 1, "质检报告生成完成")
         return {"qc_report": qc_report}
 
     graph = StateGraph(PipelineState)

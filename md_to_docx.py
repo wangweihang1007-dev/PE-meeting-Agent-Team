@@ -4,7 +4,11 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
-from docx.shared import Pt
+from docx.shared import Inches, Pt
+
+
+IMAGE_PATTERN = re.compile(r"^!\[(?P<alt>.*?)\]\((?P<path>.*?)\)$")
+QUESTION_LINE_PATTERN = re.compile(r"^(?P<label>(?:Q|问题)\s*[:：])(?P<body>.*)$", re.IGNORECASE)
 
 
 def has_style(document: Document, style_name: str) -> bool:
@@ -71,6 +75,30 @@ def normalize_markdown_line(line: str) -> str:
     return line.strip().replace("\\_", "_")
 
 
+def add_markdown_image(document: Document, markdown_path: Path, line: str) -> bool:
+    match = IMAGE_PATTERN.match(line)
+    if not match:
+        return False
+    image_path = Path(match.group("path").strip().strip('"'))
+    if not image_path.is_absolute():
+        image_path = markdown_path.parent / image_path
+    if not image_path.exists():
+        add_paragraph(document, f"[图片缺失：{match.group('alt') or image_path.name}] {image_path}", style="Normal")
+        return True
+
+    paragraph = document.add_paragraph(style=safe_style(document, "Normal"))
+    paragraph.paragraph_format.first_line_indent = None
+    try:
+        paragraph.add_run().add_picture(str(image_path), width=Inches(6.0))
+    except Exception as exc:
+        paragraph.add_run(f"[图片插入失败：{image_path.name}；{exc}]")
+    alt = match.group("alt").strip()
+    if alt:
+        caption = add_paragraph(document, alt, style="Normal")
+        caption.paragraph_format.first_line_indent = None
+    return True
+
+
 def heading_style_for_line(line: str) -> tuple[str, int] | None:
     if line.startswith("#"):
         level = len(line) - len(line.lstrip("#"))
@@ -105,6 +133,10 @@ def markdown_to_docx(markdown_path: Path, template_path: Path, output_path: Path
             continue
         if set(line) <= {"-"}:
             continue
+        if IMAGE_PATTERN.match(line):
+            flush_body_list(document, body_list_items)
+            add_markdown_image(document, markdown_path, line)
+            continue
         heading = heading_style_for_line(line)
         if heading:
             flush_body_list(document, body_list_items)
@@ -132,12 +164,12 @@ def markdown_to_docx(markdown_path: Path, template_path: Path, output_path: Path
                 paragraph = add_paragraph(document, line, style="Normal")
                 apply_body_indent(paragraph)
             continue
-        if line.startswith("Q："):
+        question_match = QUESTION_LINE_PATTERN.match(line)
+        if question_match:
             flush_body_list(document, body_list_items)
             paragraph = document.add_paragraph(style="Normal")
-            run = paragraph.add_run("Q：")
+            run = paragraph.add_run(f"{question_match.group('label')}{question_match.group('body')}")
             run.bold = True
-            paragraph.add_run(line[2:])
             continue
         if line.startswith("A："):
             flush_body_list(document, body_list_items)

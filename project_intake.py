@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
+from openpyxl.styles import Font
 
 from deepseek_client import DeepSeekClient
 
@@ -33,6 +36,8 @@ FIELD_ORDER = [
 ]
 
 REQUIRED_SECTIONS = ["1.团队", "2.股权结构", "3.产品", "4.技术", "5.生产、客户", "6.市场", "7.收入"]
+VALUE_SECTION_TITLES = [f"{section}：" for section in REQUIRED_SECTIONS]
+BLACK = "FF000000"
 
 
 def _read_text_file(path: Path) -> str:
@@ -214,10 +219,8 @@ def generate_project_intake(
         intake_date=intake_date,
     )
     result = client.chat(
-        [
-            {"role": "system", "content": "你只输出合法 JSON，不输出解释。"},
-            {"role": "user", "content": prompt},
-        ],
+        "你是项目录入智能体。你只输出合法 JSON，不输出解释。",
+        prompt,
         temperature=0.1,
     )
     entry = _extract_json_object(result)
@@ -266,11 +269,83 @@ def _next_sequence(ws, last_row: int) -> int:
     return (max(values) if values else 0) + 1
 
 
+def _unmerge_target_row(ws, row: int, max_col: int) -> None:
+    ranges = list(ws.merged_cells.ranges)
+    for merged_range in ranges:
+        if (
+            merged_range.min_row <= row <= merged_range.max_row
+            and merged_range.min_col <= max_col
+            and merged_range.max_col >= 1
+        ):
+            ws.unmerge_cells(str(merged_range))
+
+
+def _black_font_like(font, *, bold: bool | None = None) -> Font:
+    return Font(
+        name=font.name,
+        sz=font.sz,
+        b=font.b if bold is None else bold,
+        i=font.i,
+        vertAlign=font.vertAlign,
+        underline=font.underline,
+        strike=font.strike,
+        color=BLACK,
+        family=font.family,
+        scheme=font.scheme,
+        charset=font.charset,
+        condense=font.condense,
+        extend=font.extend,
+        outline=font.outline,
+        shadow=font.shadow,
+    )
+
+
+def _inline_font_from_cell_font(font, *, bold: bool) -> InlineFont:
+    return InlineFont(
+        rFont=font.name,
+        sz=font.sz,
+        b=bold,
+        i=font.i,
+        u=font.underline,
+        strike=font.strike,
+        color=BLACK,
+    )
+
+
+def _rich_value_text(value: Any, base_font) -> Any:
+    text = "" if value is None else str(value)
+    if not text:
+        return text
+
+    matches = []
+    for title in VALUE_SECTION_TITLES:
+        start = text.find(title)
+        if start >= 0:
+            matches.append((start, start + len(title)))
+    if not matches:
+        return text
+
+    matches.sort()
+    rich = CellRichText()
+    cursor = 0
+    normal_font = _inline_font_from_cell_font(base_font, bold=False)
+    bold_font = _inline_font_from_cell_font(base_font, bold=True)
+    for start, end in matches:
+        if start > cursor:
+            rich.append(TextBlock(normal_font, text[cursor:start]))
+        rich.append(TextBlock(bold_font, text[start:end]))
+        cursor = end
+    if cursor < len(text):
+        rich.append(TextBlock(normal_font, text[cursor:]))
+    return rich
+
+
 def write_intake_excel(entry: dict[str, Any], template_path: Path, output_path: Path) -> None:
     workbook = load_workbook(template_path)
     ws = workbook.worksheets[0]
     source_row = _last_formal_row(ws)
     target_row = source_row + 1
+    _unmerge_target_row(ws, target_row, len(FIELD_ORDER))
     ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
     for col in range(1, len(FIELD_ORDER) + 1):
         src = ws.cell(source_row, col)
@@ -280,15 +355,21 @@ def write_intake_excel(entry: dict[str, Any], template_path: Path, output_path: 
         dst.number_format = src.number_format
         dst.alignment = copy.copy(src.alignment)
         dst.protection = copy.copy(src.protection)
+        dst.font = _black_font_like(src.font)
 
     for col, field in enumerate(FIELD_ORDER, 1):
         if field == "序号":
             value = _next_sequence(ws, source_row)
         elif field == "成立时间":
             value = _parse_date(entry.get(field, ""))
+        elif field == "价值":
+            value = _rich_value_text(entry.get(field, ""), ws.cell(target_row, col).font)
         else:
             value = entry.get(field, "")
-        ws.cell(target_row, col).value = value
+        cell = ws.cell(target_row, col)
+        cell.value = value
+        if field != "价值":
+            cell.font = _black_font_like(cell.font)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
